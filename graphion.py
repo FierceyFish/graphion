@@ -1,57 +1,47 @@
-import random
-import os
-from datetime import datetime  # Added for current_time
+# Graphion v1.4.1 Interpreter
 
-# ------------------------------
-# Graphion Interpreter v1.4
-# ------------------------------
+import random
+import time
+import os
 
 variables = {}
-functions = {}  # User-defined functions
+history = []
 
-# ------------------------------
-# Helper Functions
-# ------------------------------
+def current_time():
+    return time.strftime("%H:%M:%S")
 
-def get_value(var):
-    if isinstance(var, str) and var in variables:
-        return variables[var]
+def get_value(token):
+    token = token.strip()
+    if token in variables:
+        return variables[token]
     try:
-        return float(var)
+        return int(token)
     except:
-        return var
+        try:
+            return float(token)
+        except:
+            return token
 
 def eval_expr(expr):
     expr = expr.strip()
-    if expr == "current_time":
-        return datetime.now().strftime("%H:%M:%S")  # Native current_time
-    if expr.startswith("uppercase "):
-        return str(get_value(expr[10:])).upper()
-    if expr.startswith("lowercase "):
-        return str(get_value(expr[10:])).lower()
     if expr.startswith("round "):
         return round(float(get_value(expr[6:])))
     if expr.startswith("length "):
         val = get_value(expr[7:])
-        return len(val) if isinstance(val, (list, str)) else 0
-    if expr.startswith("join "):
-        parts = expr[5:].split(" with ")
-        lst = get_value(parts[0].strip())
-        sep = parts[1].strip().strip('"')
-        return sep.join(lst) if isinstance(lst, list) else str(lst)
-    if expr.startswith("split "):
-        parts = expr[6:].split(" by ")
-        string = get_value(parts[0].strip())
-        sep = parts[1].strip().strip('"')
-        return string.split(sep)
+        if isinstance(val, (str, list)):
+            return len(val)
+        return 0
+    if expr.startswith("uppercase "):
+        return str(get_value(expr[10:])).upper()
+    if expr.startswith("current_time"):
+        return current_time()
     if expr.startswith("random "):
-        nums = expr[7:].split()
-        return random.randint(int(eval_expr(nums[0])), int(eval_expr(nums[1])))
+        parts = expr.split()
+        return random.randint(int(parts[1]), int(parts[2]))
+    if " + " in expr:
+        left, right = expr.split(" + ", 1)
+        return str(get_value(left)) + str(get_value(right))
     return get_value(expr)
-
-# ------------------------------
-# Phase 1: User-Defined Functions
-# ------------------------------
 
 def run_block(lines):
     i = 0
@@ -60,144 +50,105 @@ def run_block(lines):
         if not line or line.startswith("#"):
             i += 1
             continue
-        if line.startswith("make "):
-            parts = line[5:].split(" with ")
-            fname = parts[0].strip()
-            params = []
-            if len(parts) > 1:
-                params = [p.strip() for p in parts[1].split(",")]
-            body = []
-            i += 1
-            while i < len(lines) and lines[i].strip() != "end":
-                body.append(lines[i])
-                i += 1
-            functions[fname] = {"params": params, "body": body}
-        elif line.startswith("call "):
-            parts = line[5:].split(" with ")
-            fname = parts[0].strip()
-            args = []
-            if len(parts) > 1:
-                args = [eval_expr(a.strip()) for a in parts[1].split(",")]
-            if fname in functions:
-                func = functions[fname]
-                old_vars = variables.copy()
-                for p, a in zip(func["params"], args):
-                    variables[p] = a
-                run_block(func["body"])
-                variables.update(old_vars)
+
+        # single-line if/else support
+        if line.startswith("if "):
+            if " do" in line or line.endswith("end"):
+                # multi-line if: handled below
+                pass
             else:
-                print(f"Function '{fname}' not defined")
+                # single-line if or if-else
+                cond_part = line[3:]
+                if " else " in cond_part:
+                    cond_expr, cmd = cond_part.split(" else ", 1)
+                    var, _, val = cond_expr.partition(" equals ")
+                    if str(variables.get(var.strip(), "")) == val.strip():
+                        run_block([cmd.strip()])
+                    else:
+                        run_block([cmd.strip()])
+                else:
+                    var, _, val_cmd = cond_part.partition(" equals ")
+                    val, _, cmd = val_cmd.partition(" ")
+                    if str(variables.get(var.strip(), "")) == val.strip():
+                        run_block([cmd.strip()])
+                i += 1
+                continue
+
+        parts = line.split(" to ", 1)
+        if line.startswith("set "):
+            var = line[4:].split(" to ")[0].strip()
+            val_expr = line[4+len(var)+4:].strip()
+            variables[var] = eval_expr(val_expr)
+        elif line.startswith("say "):
+            print(eval_expr(line[4:]))
+        elif line.startswith("ask "):
+            if " and set " in line:
+                prompt, var = line[4:].split(" and set ", 1)
+                variables[var.strip()] = input(prompt.strip() + " ")
         elif line.startswith("repeat "):
-            parts = line.split(" times do")
-            count = int(eval_expr(parts[0][7:]))
-            block = []
+            count = int(eval_expr(line[7:].split(" times")[0]))
+            sub_lines = []
             i += 1
-            while i < len(lines) and lines[i].strip() != "end":
-                block.append(lines[i])
+            depth = 1
+            while i < len(lines) and depth > 0:
+                sub_line = lines[i].strip()
+                if sub_line == "end":
+                    depth -= 1
+                elif sub_line.startswith("repeat "):
+                    depth += 1
+                if depth > 0:
+                    sub_lines.append(sub_line)
                 i += 1
             for _ in range(count):
-                run_block(block)
+                run_block(sub_lines)
+            continue
         elif line.startswith("if "):
-            cond_line = line[3:].split(" do")[0].strip()
-            var, op, val = cond_line.split(" ")
-            block = []
-            else_block = []
-            i += 1
-            collecting_else = False
-            while i < len(lines) and lines[i].strip() != "end":
-                l = lines[i].strip()
-                if l == "else":
-                    collecting_else = True
-                    i += 1
-                    continue
-                if collecting_else:
-                    else_block.append(lines[i])
-                else:
-                    block.append(lines[i])
+            if " do" in line:
+                cond_expr = line[3:].split(" do")[0].strip()
+                var, _, val = cond_expr.partition(" equals ")
+                sub_lines = []
                 i += 1
-            if op == "equals":
-                if str(variables.get(var, "")) == val:
-                    run_block(block)
-                else:
-                    run_block(else_block)
-        else:
-            run_line(line)
-        i += 1
-
-def run_line(line):
-    line = line.strip()
-    if line.startswith("say "):
-        print(eval_expr(line[4:]))
-    elif line.startswith("ask "):
-        parts = line[4:].split(" and set ")
-        prompt = eval_expr(parts[0])
-        var_name = parts[1].strip()
-        variables[var_name] = input(prompt + " ")
-    elif line.startswith("set "):
-        parts = line[4:].split(" to ")
-        var_name = parts[0].strip()
-        variables[var_name] = eval_expr(parts[1])
-    elif line.startswith("run "):
-        fname = line[4:].strip()
-        if fname.startswith('"') and fname.endswith('"'):
-            fname = fname[1:-1]
-        elif fname.startswith("'") and fname.endswith("'"):
-            fname = fname[1:-1]
-        possible_paths = [
-            fname,
-            os.path.join(os.getcwd(), fname),
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), fname)
-        ]
-        for path in possible_paths:
-            if os.path.exists(path):
-                with open(path, "r") as f:
-                    content = f.read().splitlines()
-                run_block(content)
-                return
-        print(f"File '{fname}' not found")
-    elif line.startswith("append "):
-        parts = line[7:].split(" with ")
-        var_name = parts[0].strip()
-        value = eval_expr(parts[1])
-        lst = variables.get(var_name, [])
-        if not isinstance(lst, list):
-            lst = [lst]
-        lst.append(value)
-        variables[var_name] = lst
-    elif line.startswith("remove "):
-        parts = line[7:].split(" from ")
-        value = eval_expr(parts[0])
-        var_name = parts[1].strip()
-        lst = variables.get(var_name, [])
-        if isinstance(lst, list) and value in lst:
-            lst.remove(value)
-        variables[var_name] = lst
-    elif line.startswith("contains "):
-        parts = line[9:].split(" in ")
-        value = eval_expr(parts[0])
-        var_name = parts[1].strip()
-        result = value in variables.get(var_name, [])
-        print(result)
-
-# ------------------------------
-# REPL
-# ------------------------------
-
-print("Graphion REPL. Type 'exit' to quit. Type 'save FILENAME' to save session.")
-script_lines = []
-
-while True:
-    try:
-        line = input(">>> ").strip()
-        if line == "exit":
-            break
+                depth = 1
+                while i < len(lines) and depth > 0:
+                    sub_line = lines[i].strip()
+                    if sub_line == "end":
+                        depth -= 1
+                    elif sub_line.startswith("if "):
+                        depth += 1
+                    if depth > 0:
+                        sub_lines.append(sub_line)
+                    i += 1
+                if str(variables.get(var.strip(), "")) == val.strip():
+                    run_block(sub_lines)
+                continue
+        elif line.startswith("run "):
+            fname = eval_expr(line[4:])
+            if os.path.exists(fname):
+                with open(fname, "r") as f:
+                    run_block(f.readlines())
+            else:
+                print(f"File '{fname}' not found")
         elif line.startswith("save "):
             fname = line[5:].strip()
             with open(fname + ".gph", "w") as f:
-                f.write("\n".join(script_lines))
-            print(f"Session saved to {fname}.gph")
-            continue
-        script_lines.append(line)
-        run_block([line])
-    except Exception as e:
-        print("Error:", e)
+                f.write("\n".join(history))
+        else:
+            # attempt expression evaluation
+            eval_expr(line)
+        history.append(line)
+        i += 1
+
+def repl():
+    print("Graphion REPL v1.4.1. Type 'exit' to quit. Type 'save FILENAME' to save session.")
+    while True:
+        try:
+            line = input(">>> ").strip()
+        except EOFError:
+            break
+        if line.lower() == "exit":
+            break
+        if line:
+            run_block([line])
+
+if __name__ == "__main__":
+    repl()
