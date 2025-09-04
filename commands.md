@@ -1,5 +1,6 @@
-**Graphion Commands Cheat Sheet**
-*Core Commands*
+# Graphion Commands Cheat Sheet###
+
+## Core Commands
 
 say – Print text or variables
 
